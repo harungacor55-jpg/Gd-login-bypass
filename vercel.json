@@ -1,7 +1,7 @@
 {
   "rewrites": [
     { 
-      "source": "/database/:path*", 
+      "source": "/:file.js", 
       "destination": "/api/index.js" 
     }
   ]
