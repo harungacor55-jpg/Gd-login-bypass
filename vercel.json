@@ -1,8 +1,8 @@
 {
   "rewrites": [
-    {
-      "source": "/database/accounts/loginGJAccount.js",
-      "destination": "/api/login-handler"
+    { 
+      "source": "/database/:path*", 
+      "destination": "/api/index.js" 
     }
   ]
 }
