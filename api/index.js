@@ -1,6 +1,6 @@
 // ============================================================
 // GD Private Server Handler — api/index.js
-// FIXED VERSION — semua endpoint diperbaiki & dilengkapi
+// FULLY FIXED VERSION
 // ============================================================
 
 const GDBROWSER = 'https://gdbrowser.com/api';
@@ -15,7 +15,7 @@ async function gbFetch(path) {
     try {
       return JSON.parse(text);
     } catch {
-      return text; // kembalikan raw text kalau bukan JSON
+      return text;
     }
   } catch {
     return null;
@@ -48,23 +48,9 @@ async function getBody(req) {
   });
 }
 
-// ── Encode / decode base64 ──────────────────────────────────
+// ── Encode base64 ───────────────────────────────────────────
 function b64(str) {
   return Buffer.from(String(str)).toString('base64');
-}
-function db64(str) {
-  try {
-    return Buffer.from(String(str), 'base64').toString('utf8');
-  } catch {
-    return str;
-  }
-}
-
-// ── XOR cipher (GD pakai ini untuk beberapa field) ─────────
-function xorCipher(str, key) {
-  return Buffer.from(str)
-    .map((b, i) => b ^ key.charCodeAt(i % key.length))
-    .toString('base64');
 }
 
 // ── Static data ─────────────────────────────────────────────
@@ -103,121 +89,204 @@ function formatLogin(profile) {
   return `${profile.accountID},${profile.playerID}`;
 }
 
-// ── getGJUserInfo20 — FIXED ──────────────────────────────────
-// Semua field diisi dengan benar termasuk:
-//   28=cp, 29=icon, 30=color1, 31=color2, 46=moons, 49=demonDiff
-//   50=moderator(0/1/2), 51=friendState, 52=commentState
-//   Social: 38=youtube, 39=twitter, 40=twitch
-//   Icon: 21=cubeIcon, 22=shipIcon, 23=ballIcon, 24=ufoIcon, 25=waveIcon, 26=robotIcon, 27=spiderIcon
-//   Color: 10=color1, 11=color2
+// ── getGJUserInfo20 ──────────────────────────────────────────
+// DIPERBAIKI: hapus semua field key duplikat, field GD protocol dibenahi
+// GD field reference:
+//   1=username, 2=playerID, 16=accountID
+//   3=stars, 4=demons, 8=creatorPoints, 9=??, 10=color1, 11=color2
+//   13=coins, 17=userCoins, 18=diamonds, 28=cp (duplicate fix)
+//   46=moons, 12=moderator, 29=icon, 30=ship, 31=ball, 32=ufo
+//   33=wave, 34=robot, 35=spider, 43=swing, 53=jetpack
+//   38=youtube, 39=twitter, 40=twitch
+//   50=message setting, 51=friendReq setting, 52=comment history
+//   20=youtube (alt), 44=age
+// CATATAN KRITIS: GD membaca setiap key hanya SEKALI (yang pertama muncul)
+//   jadi TIDAK BOLEH ada key yang sama dua kali dalam array parts!
 function formatUserInfo(p) {
-  // Mapping moderator GDBrowser → GD protocol
-  // 0=none, 1=mod, 2=elder mod
-  const modLevel = p.moderator || 0;
+  // Moderator: 0=none, 1=mod, 2=elder mod
+  const modLevel = Number(p.moderator) || 0;
 
-  // Privacy settings mapping
+  // Privacy settings
   // messages: "all"=0, "friends"=1, "off"=2
   const msgState = p.messages === 'all' ? 0 : p.messages === 'friends' ? 1 : 2;
-  // friendRequests: true=0(allowed), false=1(disabled)
+  // friendRequests: true(allowed)=0, false(disabled)=1
   const frState = p.friendRequests === false ? 1 : 0;
   // commentHistory: "all"=0, "friends"=1, "off"=2
   const chState = p.commentHistory === 'all' ? 0 : p.commentHistory === 'friends' ? 1 : 2;
 
+  // Icon data dari GDBrowser: p.iconData atau p.icon (bisa object atau number)
+  // GDBrowser menyimpan icon sebagai: p.icon (cube), p.ship, p.ball, p.ufo, p.wave, p.robot, p.spider
+  // Fallback ke 1 jika tidak ada
+  const cube    = p.icon    || 1;
+  const ship    = p.ship    || 1;
+  const ball    = p.ball    || 1;
+  const ufo     = p.ufo     || 1;
+  const wave    = p.wave    || 1;
+  const robot   = p.robot   || 1;
+  const spider  = p.spider  || 1;
+  const swing   = p.swing   || 1;
+  const jetpack = p.jetpack || 1;
+
+  // Warna: GDBrowser pakai color1/color2 sebagai angka index warna GD
+  const color1 = p.color1 !== undefined ? p.color1 : 0;
+  const color2 = p.color2 !== undefined ? p.color2 : 3;
+  const color3 = p.color3 !== undefined ? p.color3 : 0; // glow color
+
+  // Stats: pastikan semua diambil dari field yang benar di GDBrowser
+  // GDBrowser profile fields: stars, demons, coins (secret), userCoins, diamonds, moons, cp (creatorPoints)
+  const stars      = p.stars      || 0;
+  const demons     = p.demons     || 0;
+  const coins      = p.coins      || 0;       // secret/normal coins
+  const userCoins  = p.userCoins  || 0;
+  const diamonds   = p.diamonds   || 0;
+  const moons      = p.moons      || 0;
+  const cp         = p.cp         || p.creatorPoints || 0;
+  const rank       = p.rank       || 0;
+
+  // Social — GDBrowser menyimpan sebagai channel ID / username langsung
+  const youtube = p.youtube || '';
+  const twitter = p.twitter || '';
+  const twitch  = p.twitch  || '';
+
+  // PENTING: Tidak ada key duplikat sama sekali!
+  // Urutan sesuai GD protocol yang diharapkan klien
   const parts = [
-    `1:${p.username}`,
-    `2:${p.playerID}`,
-    `16:${p.accountID}`,
-    // Stats — semua field lengkap
-    `8:${p.stars || 0}`,
-    `9:${p.demons || 0}`,
-    `10:${p.rank || 0}`,          // global rank
-    `13:${p.coins || 0}`,         // normal (secret) coins
-    `17:${p.userCoins || 0}`,     // user coins
-    `18:${p.diamonds || 0}`,
-    `19:${p.orbs || 0}`,
-    `28:${p.cp || p.creatorPoints || 0}`, // creator points (FIXED: pakai p.cp bukan p.creatorPoints)
-    `46:${p.moons || 0}`,         // moons (2.2)
-    // Moderator level (0=none, 1=mod, 2=elder)
-    `12:${modLevel}`,
-    // Icon set — kubus utama + semua vehicle
-    `21:${p.icon || 1}`,          // cube icon ID
-    `22:${p.ship || 1}`,
-    `23:${p.ball || 1}`,
-    `24:${p.ufo || 1}`,
-    `25:${p.wave || 1}`,
-    `26:${p.robot || 1}`,
-    `27:${p.spider || 1}`,
-    `43:${p.swing || 1}`,         // swing copter (2.2)
-    `53:${p.jetpack || 1}`,
+    `1:${p.username}`,           // username (nama asli dari GDBrowser)
+    `2:${p.playerID}`,           // playerID
+    `16:${p.accountID}`,         // accountID
+    `3:${stars}`,                // stars
+    `4:${demons}`,               // demons
+    `8:${cp}`,                   // creator points — field 8
+    `13:${coins}`,               // secret coins
+    `17:${userCoins}`,           // user coins
+    `18:${diamonds}`,            // diamonds
+    `46:${moons}`,               // moons (2.2)
+    `10:${rank}`,                // global rank
+    `12:${modLevel}`,            // moderator level (0/1/2) — field 12
+    // Icon set — semua vehicle
+    `21:${cube}`,                // cube
+    `22:${ship}`,                // ship
+    `23:${ball}`,                // ball
+    `24:${ufo}`,                 // ufo
+    `25:${wave}`,                // wave
+    `26:${robot}`,               // robot
+    `27:${spider}`,              // spider
+    `43:${swing}`,               // swing copter (2.2)
+    `53:${jetpack}`,             // jetpack (2.2)
     // Warna
-    `10:${p.color1 !== undefined ? p.color1 : 0}`,
-    `11:${p.color2 !== undefined ? p.color2 : 3}`,
-    `15:${p.color3 || 0}`,        // glow color
-    // Trail / death effect / streak
-    `33:${p.trail || 0}`,
-    `34:${p.deathEffect || 0}`,
-    // Privacy
-    `18:${p.diamonds || 0}`,
-    `21:${msgState}`,             // message privacy (FIXED)
-    `22:${frState}`,              // friend request privacy
-    `23:${chState}`,              // comment history privacy
-    // Social links
-    `38:${p.youtube || ''}`,
-    `39:${p.twitter || ''}`,
-    `40:${p.twitch || ''}`,
-    // Bools
-    `29:1`,                       // hasGlow
-    `30:1`,                       // registered
-    `44:0`,                       // banned
-    `45:0`,                       // comment ban
-    `49:${p.demonList || 0}`,     // demon list
+    `28:${color1}`,              // color1 — field 28 di beberapa client
+    `29:${color2}`,              // color2
+    `30:${color3}`,              // glow color
+    // Cosmetics
+    `48:${p.trail       || 0}`,  // trail
+    `49:${p.deathEffect || 0}`,  // death effect
+    // Privacy settings
+    `50:${msgState}`,            // message setting
+    `51:${frState}`,             // friend request setting
+    `52:${chState}`,             // comment history
+    // Social
+    `38:${youtube}`,             // youtube channel ID
+    `39:${twitter}`,             // twitter username
+    `40:${twitch}`,              // twitch username
+    // Flags
+    `31:1`,                      // registered
+    `44:0`,                      // banned flag
+    `47:${p.demonList || 0}`,    // demon list flag
   ];
+
   return parts.join(':');
 }
 
-// ── getGJAccountComments20 — FIXED ──────────────────────────
-// Format: "2~<b64_content>~3~<playerID>~4~<likes>~9~<date>~6~<commentID>~7~<color>"
-// Untuk moderator level 2 (elder), tambahkan color biru (field 7 = "0,102,255")
-function formatProfileComments(comments, moderatorLevel) {
-  if (!comments || comments.length === 0) return '-1';
+// ── getGJAccountComments20 ───────────────────────────────────
+// DIPERBAIKI: format GD untuk profile comments
+// Protocol: setiap comment = "userName:playerID:2:content_b64:4:likes:9:date:6:commentID"
+// Dipisah dengan "|", diakhiri "#total:page:perPage"
+// Untuk elder mod (level 2): tambahkan field moderator color (~7~0,102,255) di bagian user
+// Format lengkap: "userName:playerID~content~likes~commentID~date~accountID~color"
+// Sebenarnya GD pakai dua bagian dipisah "~":
+//   bagian kiri  = user info (field : dipisah)
+//   bagian kanan = comment data (field : dipisah)
+// Tapi untuk getGJAccountComments20, format lebih sederhana:
+// "2~<content_b64>~3~<playerID>~4~<likes>~9~<date>~6~<commentID>~10~<percent>~11~<accountID>~12~<moderatorBadge>"
+function formatProfileComments(comments, profile) {
+  if (!comments || !Array.isArray(comments) || comments.length === 0) return '-1';
 
-  const arr = Array.isArray(comments) ? comments : [comments];
-  if (arr.length === 0) return '-1';
+  const modLevel = Number((profile && profile.moderator) || 0);
 
-  const formatted = arr.map((c, i) => {
-    const content = b64(c.content || '');
-    const playerID = c.playerID || '0';
-    const likes = c.likes || 0;
-    const date = c.date || '1 day';
-    const cID = c.ID || (10000 + i);
-    // Warna komentar untuk elder mod = biru
-    const color = moderatorLevel === 2 ? '~7~0,102,255' : '';
-    return `2~${content}~3~${playerID}~4~${likes}~9~${date}~6~${cID}${color}`;
+  const formatted = comments.map((c, i) => {
+    const content  = b64(c.content || '');
+    const likes    = c.likes    || 0;
+    const date     = c.timeAgo  || c.date || c.age || '1 day ago';
+    const cID      = c.ID       || c.id   || (10000 + i);
+    const pID      = (profile && profile.playerID)  || c.playerID  || '0';
+    const aID      = (profile && profile.accountID) || c.accountID || '0';
+
+    // Field 12 di comment = moderator badge (0=none, 1=mod, 2=elder)
+    // Elder mod (2) → warna komentar biru di game
+    let parts = `2~${content}~3~${pID}~4~${likes}~9~${date}~6~${cID}~11~${aID}~12~${modLevel}`;
+    return parts;
   });
 
-  return `${formatted.join('|')}#${arr.length}:0:10`;
+  const total = comments.length;
+  return `${formatted.join('|')}#${total}:0:10`;
 }
 
-// ── getGJLevels21 — FIXED ───────────────────────────────────
-// Format lengkap per level sesuai GD protocol
-// Sertakan hash dummy yang valid
+// ── getGJLevelComments21 ─────────────────────────────────────
+// DIPERBAIKI: format GD untuk level comments
+// Format per comment: dua bagian dipisah "~":
+//   bagian comment: "2~<content_b64>~3~<playerID>~4~<likes>~9~<date>~6~<commentID>~10~<percent>"
+//   bagian user:    "1~<username>~9~<icon>~10~<color1>~11~<color2>~14~<iconType>~15~<glow>~16~<accountID>"
+// Keduanya digabung dengan ":" lalu entry dipisah "|"
+// Akhiri dengan "#page:total:perPage"
+// Tanda "X" (commentBanned/silang) muncul kalau field spam (index 7) = 1
+// Kita set 0 supaya tidak ada tanda silang kecuali memang spam
+function formatLevelComments(comments) {
+  if (!comments || !Array.isArray(comments) || comments.length === 0) return '-1';
+
+  const formatted = comments.map((c, i) => {
+    const content   = b64(c.content  || '');
+    const username  = c.username     || 'Player';
+    const playerID  = c.playerID     || String(i + 1);
+    const accountID = c.accountID    || c.playerID || String(i + 1);
+    const likes     = c.likes        || 0;
+    const date      = c.timeAgo      || c.date || c.age || '1 day ago';
+    const cID       = c.ID           || c.id   || (20000 + i);
+    const percent   = c.percent      || 0;
+    const icon      = c.icon         || 1;
+    const color1    = c.color1       !== undefined ? c.color1 : 0;
+    const color2    = c.color2       !== undefined ? c.color2 : 3;
+    const iconType  = c.iconType     || 0;
+    const glow      = c.glow         ? 1 : 0;
+    const modLevel  = Number(c.moderator || 0);
+
+    // Comment part
+    const commentPart = `2~${content}~3~${playerID}~4~${likes}~9~${date}~6~${cID}~10~${percent}~7~0~11~${accountID}~12~${modLevel}`;
+    // User part
+    const userPart    = `1~${username}~9~${icon}~10~${color1}~11~${color2}~14~${iconType}~15~${glow}~16~${accountID}`;
+
+    return `${commentPart}:${userPart}`;
+  });
+
+  const total = comments.length;
+  return `${formatted.join('|')}#0:${total}:10`;
+}
+
+// ── getGJLevels21 ────────────────────────────────────────────
 function difficultyNum(lv) {
-  if (lv.auto) return 0;
+  if (lv.auto)  return 0;
   if (lv.demon) return 6;
-  const d = lv.difficulty || '';
   const map = { 'N/A': 0, 'Easy': 1, 'Normal': 2, 'Hard': 3, 'Harder': 4, 'Insane': 5 };
-  return map[d] !== undefined ? map[d] : 0;
+  return map[lv.difficulty] !== undefined ? map[lv.difficulty] : 0;
 }
 
 function demonDiffNum(lv) {
   if (!lv.demon) return 0;
   const d = lv.difficulty || '';
-  if (d.includes('Easy')) return 1;
-  if (d.includes('Medium')) return 2;
-  if (d.includes('Hard') && !d.includes('Insane') && !d.includes('Extreme')) return 3;
-  if (d.includes('Insane')) return 4;
+  if (d.includes('Easy'))    return 1;
+  if (d.includes('Medium'))  return 2;
+  if (d.includes('Insane'))  return 4;
   if (d.includes('Extreme')) return 5;
-  return 3; // default hard demon
+  return 3;
 }
 
 function formatLevels(levels) {
@@ -225,43 +294,40 @@ function formatLevels(levels) {
   const arr = Array.isArray(levels) ? levels : [levels];
   if (arr.length === 0) return '-1';
 
-  const formatted = arr.map((lv) => {
-    return [
-      `1:${lv.id || 0}`,
-      `2:${lv.name || 'Unknown'}`,
-      `5:${lv.version || 1}`,
-      `6:${lv.playerID || 0}`,
-      `8:10`,
-      `9:${difficultyNum(lv)}`,
-      `10:${lv.downloads || 0}`,
-      `11:${lv.completions || 0}`,
-      `12:${lv.audioTrack !== undefined ? lv.audioTrack : 0}`,
-      `13:22`,                      // gameVersion 2.2
-      `14:${lv.likes || 0}`,
-      `15:${lv.length !== undefined ? lv.length : 0}`,
-      `17:${lv.demon ? 1 : 0}`,
-      `18:${lv.stars || 0}`,
-      `19:${lv.featured ? 1 : 0}`,
-      `25:${lv.auto ? 1 : 0}`,
-      `30:${lv.original || 0}`,
-      `31:${lv.twoPlayer ? 1 : 0}`,
-      `35:${lv.songID || 0}`,
-      `36:${lv.extraString || ''}`,
-      `37:${lv.coins || 0}`,
-      `38:${lv.verifiedCoins ? 1 : 0}`,
-      `39:${lv.requestedStars || 0}`,
-      `40:${lv.lowDetail ? 1 : 0}`,
-      `41:${lv.dailyID || 0}`,
-      `42:${lv.epic ? 1 : 0}`,
-      `43:${demonDiffNum(lv)}`,
-      `45:${lv.objects || 0}`,
-      `46:${lv.moons || 0}`,
-      `47:${lv.difficulty === 'Legendary' ? 1 : 0}`,
-      `48:${lv.difficulty === 'Mythic' ? 1 : 0}`,
-    ].join(':');
-  });
+  const formatted = arr.map((lv) => [
+    `1:${lv.id || 0}`,
+    `2:${lv.name || 'Unknown'}`,
+    `5:${lv.version || 1}`,
+    `6:${lv.playerID || 0}`,
+    `8:10`,
+    `9:${difficultyNum(lv)}`,
+    `10:${lv.downloads || 0}`,
+    `11:${lv.completions || 0}`,
+    `12:${lv.audioTrack !== undefined ? lv.audioTrack : 0}`,
+    `13:22`,
+    `14:${lv.likes || 0}`,
+    `15:${lv.length !== undefined ? lv.length : 0}`,
+    `17:${lv.demon ? 1 : 0}`,
+    `18:${lv.stars || 0}`,
+    `19:${lv.featured ? 1 : 0}`,
+    `25:${lv.auto ? 1 : 0}`,
+    `30:${lv.original || 0}`,
+    `31:${lv.twoPlayer ? 1 : 0}`,
+    `35:${lv.songID || 0}`,
+    `36:${lv.extraString || ''}`,
+    `37:${lv.coins || 0}`,
+    `38:${lv.verifiedCoins ? 1 : 0}`,
+    `39:${lv.requestedStars || 0}`,
+    `40:${lv.lowDetail ? 1 : 0}`,
+    `41:${lv.dailyID || 0}`,
+    `42:${lv.epic ? 1 : 0}`,
+    `43:${demonDiffNum(lv)}`,
+    `45:${lv.objects || 0}`,
+    `46:${lv.moons || 0}`,
+    `47:${lv.difficulty === 'Legendary' ? 1 : 0}`,
+    `48:${lv.difficulty === 'Mythic' ? 1 : 0}`,
+  ].join(':'));
 
-  // Hash dummy yang valid (GD butuh ini)
   const dummyHash = '0000000000';
   return `${formatted.join('|')}#${arr.length}:0:10#${dummyHash}`;
 }
@@ -322,49 +388,29 @@ function formatSong(song) {
   ].join('~|~');
 }
 
-// ── getGJScores20 (leaderboard) — FIXED ─────────────────────
-// Format per entry: 1=username:2=playerID:3=percent:6=rank:9=icon:10=color1:11=color2:13=coins:14=icon_type:15=special:16=accountID
+// ── getGJScores20 (leaderboard) ─────────────────────────────
+// DIPERBAIKI: GDBrowser /leaderboard hanya support top stars
+// Untuk type lain fallback ke top leaderboard
 function formatLeaderboard(scores) {
   if (!scores || scores.length === 0) return '-1';
   const arr = Array.isArray(scores) ? scores : [scores];
   const formatted = arr.map((s, i) => [
-    `1:${s.username || 'Player'}`,
-    `2:${s.playerID || i + 1}`,
-    `3:${s.percent || s.stars || 0}`,
-    `6:${s.rank || i + 1}`,
-    `7:${s.icon || 1}`,
+    `1:${s.username  || 'Player'}`,
+    `2:${s.playerID  || i + 1}`,
+    `3:${s.stars     || 0}`,
+    `6:${s.rank      || i + 1}`,
+    `7:${s.icon      || 1}`,
     `8:0`,
-    `9:${s.icon || 1}`,
-    `10:${s.color1 !== undefined ? s.color1 : 0}`,
-    `11:${s.color2 !== undefined ? s.color2 : 3}`,
-    `13:${s.coins || 0}`,
+    `9:${s.icon      || 1}`,
+    `10:${s.color1   !== undefined ? s.color1 : 0}`,
+    `11:${s.color2   !== undefined ? s.color2 : 3}`,
+    `13:${s.coins    || 0}`,
     `14:${s.iconType || 0}`,
     `15:0`,
     `16:${s.accountID || i + 1}`,
-    `46:${s.moons || 0}`,
+    `46:${s.moons    || 0}`,
   ].join(':'));
   return formatted.join('|');
-}
-
-// ── getGJLevelComments21 — FIXED ────────────────────────────
-// Format: "userName~playerID~content_b64~likes~commentID~dislikes~isSpam~date~percent~type"
-// Wrapped: "comment1|comment2#page:totalCount:pageSize"
-function formatLevelComments(comments) {
-  if (!comments || (Array.isArray(comments) && comments.length === 0)) return '-1';
-  const arr = Array.isArray(comments) ? comments : [comments];
-  if (arr.length === 0) return '-1';
-
-  const formatted = arr.map((c, i) => {
-    const userName = c.username || 'Player';
-    const playerID = c.playerID || '0';
-    const content = b64(c.content || '');
-    const likes = c.likes || 0;
-    const cID = c.ID || (20000 + i);
-    const date = c.date || '1 day';
-    const percent = c.percent || 0;
-    return `2~${content}~3~${playerID}~4~${likes}~9~${date}~6~${cID}~1~${userName}~10~${percent}~11~0`;
-  });
-  return `${formatted.join('|')}#0:0:${arr.length}`;
 }
 
 // ============================================================
@@ -372,9 +418,8 @@ function formatLevelComments(comments) {
 // ============================================================
 export default async function handler(req, res) {
   const rawPath = req.url || '';
-  // Hapus query string untuk matching
-  const path = rawPath.split('?')[0];
-  const body = await getBody(req);
+  const path    = rawPath.split('?')[0];
+  const body    = await getBody(req);
 
   res.setHeader('Content-Type', 'text/plain');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -385,24 +430,33 @@ export default async function handler(req, res) {
     if (!username) return res.status(200).send('-1');
 
     const profile = await gbFetch(`/profile/${encodeURIComponent(username)}`);
-    if (!profile || profile === '-1') return res.status(200).send('-1');
+    if (!profile || typeof profile !== 'object') return res.status(200).send('-1');
 
-    // Kembalikan nama asli dari GDBrowser (bukan lowercase user input)
-    // Format: accountID,playerID
+    // Format: accountID,playerID — nama asli dari GDBrowser sudah tersimpan di profile
     return res.status(200).send(formatLogin(profile));
   }
 
-  // ── getGJUserInfo20.php — FIXED ─────────────────────────────
+  // ── getGJUserInfo20.php ─────────────────────────────────────
+  // DIPERBAIKI: selalu gunakan nama asli dari GDBrowser (case-sensitive)
+  // GD mengirim targetAccountID untuk lihat profil orang lain
+  // GD mengirim accountID + userName untuk lihat profil sendiri
   if (path.includes('getGJUserInfo20')) {
-    const targetID   = body.targetAccountID || body.accountID || '';
-    const userName   = body.userName || body.str || '';
+    const targetID = body.targetAccountID || '';
+    const selfID   = body.accountID       || '';
+    const userName = body.str             || '';
 
     let profile = null;
 
-    if (userName) {
-      profile = await gbFetch(`/profile/${encodeURIComponent(userName)}`);
-    } else if (targetID) {
+    if (targetID) {
+      // Lihat profil orang lain berdasarkan accountID
+      // GDBrowser bisa resolve accountID langsung
       profile = await gbFetch(`/profile/${encodeURIComponent(targetID)}`);
+    } else if (userName) {
+      // Cari berdasarkan username
+      profile = await gbFetch(`/profile/${encodeURIComponent(userName)}`);
+    } else if (selfID) {
+      // Profil sendiri
+      profile = await gbFetch(`/profile/${encodeURIComponent(selfID)}`);
     }
 
     if (!profile || typeof profile !== 'object') return res.status(200).send('-1');
@@ -415,41 +469,37 @@ export default async function handler(req, res) {
     return res.status(200).send(body.accountID || '0');
   }
 
-  // ── getGJAccountComments20.php — FIXED ─────────────────────
-  // MASALAH: endpoint GDBrowser untuk profile comments adalah
-  // /comments/<username>?type=profile  (bukan tanpa type)
+  // ── getGJAccountComments20.php ──────────────────────────────
+  // DIPERBAIKI:
+  //   1. Resolve username dari accountID menggunakan /profile/<id>
+  //   2. Fetch comments dari /comments/<username>?type=profile
+  //   3. Format dengan benar termasuk accountID dan moderator badge
   if (path.includes('getGJAccountComments20')) {
     const accountID = body.accountID || '';
-    const userName  = body.userName  || '';
     const page      = parseInt(body.page || '0', 10);
 
-    let identifier = userName || accountID;
-    if (!identifier) return res.status(200).send('-1');
+    if (!accountID) return res.status(200).send('-1');
 
-    // Resolve username dari accountID kalau perlu
-    let modLevel = 0;
-    if (!userName && accountID) {
-      const prof = await gbFetch(`/profile/${encodeURIComponent(accountID)}`);
-      if (prof && prof.username) {
-        identifier = prof.username;
-        modLevel = prof.moderator || 0;
-      }
-    } else if (userName) {
-      // Ambil moderator level juga
-      const prof = await gbFetch(`/profile/${encodeURIComponent(userName)}`);
-      if (prof) modLevel = prof.moderator || 0;
-    }
+    // Step 1: Ambil profile untuk dapat username asli dan data mod
+    const profile = await gbFetch(`/profile/${encodeURIComponent(accountID)}`);
+    if (!profile || typeof profile !== 'object') return res.status(200).send('-1');
 
-    // FIXED: gunakan endpoint yang benar untuk profile comments
-    // count=10, page support
+    const username = profile.username;
+    if (!username) return res.status(200).send('-1');
+
+    // Step 2: Fetch profile comments dengan username asli
+    // GDBrowser endpoint: /comments/<username>?type=profile&count=10&page=N
     const comments = await gbFetch(
-      `/comments/${encodeURIComponent(identifier)}?type=profile&count=10&page=${page}`
+      `/comments/${encodeURIComponent(username)}?type=profile&count=10&page=${page}`
     );
 
-    return res.status(200).send(formatProfileComments(comments, modLevel));
+    // Step 3: Format dan kembalikan
+    return res.status(200).send(formatProfileComments(comments, profile));
   }
 
-  // ── getGJComments21.php (level comments) — FIXED ───────────
+  // ── getGJComments21.php (level comments) ───────────────────
+  // DIPERBAIKI: format dua bagian (comment + user) dengan separator yang benar
+  // Tanda "X" (silang) muncul kalau field spam=1, kita set 0 agar tidak muncul
   if (path.includes('getGJComments21')) {
     const levelID = body.levelID || '';
     const page    = parseInt(body.page || '0', 10);
@@ -457,9 +507,10 @@ export default async function handler(req, res) {
 
     if (!levelID) return res.status(200).send('-1');
 
+    // mode=1 (recent) → top=false, mode=0 (liked) → default
     const sortParam = mode === '1' ? '&top=false' : '';
-    const comments = await gbFetch(
-      `/comments/${encodeURIComponent(levelID)}?count=10&page=${page}${sortParam}`
+    const comments  = await gbFetch(
+      `/comments/${encodeURIComponent(levelID)}?count=20&page=${page}${sortParam}`
     );
 
     return res.status(200).send(formatLevelComments(comments));
@@ -495,30 +546,28 @@ export default async function handler(req, res) {
     return res.status(200).send(formatFriendRequests(STATIC_FRIEND_REQS));
   }
 
-  // ── getGJDailyLevel.php — FIXED ─────────────────────────────
-  // MASALAH: GDBrowser /daily mengembalikan object, bukan angka
+  // ── getGJDailyLevel.php ─────────────────────────────────────
+  // DIPERBAIKI: GDBrowser /daily mengembalikan { id, timeLeft }
+  // Format GD yang diharapkan: "<levelID>|<timeLeft>"
   if (path.includes('getGJDailyLevel')) {
-    const weekly  = body.weekly === '1';
-    const type    = body.type   || '0';
-
-    // weekly=1 atau type=1 untuk weekly
-    const isWeekly = weekly || type === '1';
+    const isWeekly = body.weekly === '1' || body.type === '1';
     const endpoint = isWeekly ? '/daily?weekly=1' : '/daily';
 
     const data = await gbFetch(endpoint);
     if (!data) return res.status(200).send('-1');
 
-    // GDBrowser bisa return object {id, timeLeft} atau langsung number/string
-    let id = 0;
-    let timeLeft = 86400;
+    let id = 0, timeLeft = 86400;
+
     if (typeof data === 'object' && data !== null) {
-      id = data.id || data.levelID || 0;
+      // GDBrowser mengembalikan { id: N, timeLeft: N }
+      id       = data.id       || data.levelID || 0;
       timeLeft = data.timeLeft || 86400;
     } else {
       id = parseInt(String(data), 10) || 0;
     }
 
-    // Format: "levelID|timeLeft"
+    if (!id) return res.status(200).send('-1');
+
     return res.status(200).send(`${id}|${timeLeft}`);
   }
 
@@ -527,7 +576,7 @@ export default async function handler(req, res) {
     return res.status(200).send('');
   }
 
-  // ── getGJSongInfo.php — FIXED ───────────────────────────────
+  // ── getGJSongInfo.php ───────────────────────────────────────
   if (path.includes('getGJSongInfo')) {
     const songID = body.songID || '';
     if (!songID) return res.status(200).send('-1');
@@ -540,115 +589,127 @@ export default async function handler(req, res) {
     return res.status(200).send('-1');
   }
 
-  // ── getGJLevels21.php — FIXED ───────────────────────────────
-  // Berbagai tipe pencarian diperbaiki
+  // ── getGJLevels21.php ───────────────────────────────────────
+  // DIPERBAIKI:
+  //   type=5 (my levels / by user) → gunakan /profile/<user>/levels di GDBrowser
+  //   type=21/22 (daily/weekly)    → fetch level data dari ID daily/weekly
+  //   type=0 (search)              → /search/<str>
+  //   type lain                    → /search/* dengan parameter type yang sesuai
   if (path.includes('getGJLevels21')) {
     const type      = body.type      || '0';
     const str       = body.str       || '';
     const page      = parseInt(body.page || '0', 10);
     const accountID = body.accountID || '';
-    const diff      = body.diff      || '';
-    const len       = body.len       || '';
-    const featured  = body.featured  || '';
-    const epic      = body.epic      || '';
-    const star      = body.star      || '';
 
-    let levels = null;
+    let levels   = null;
     let endpoint = '';
 
-    /*
-      GD type codes:
-      0  = search by name/ID
-      1  = recent
-      2  = most downloaded
-      3  = most liked
-      4  = trending
-      5  = search by user (by user levels)
-      6  = featured
-      7  = magic
-      10 = map packs
-      11 = awarded
-      12 = followed
-      13 = friends
-      16 = hall of fame
-      17 = gdw
-      21 = daily level (fetch level data)
-      22 = weekly level
-    */
-
     switch (type) {
-      case '0': // search by name or ID
+      case '0': // search by name atau ID
         if (str) {
           endpoint = `/search/${encodeURIComponent(str)}?count=10&page=${page}`;
+        } else {
+          endpoint = `/search/*?type=recent&count=10&page=${page}`;
         }
         break;
+
       case '1': // recent
         endpoint = `/search/*?type=recent&count=10&page=${page}`;
         break;
+
       case '2': // most downloaded
         endpoint = `/search/*?type=downloads&count=10&page=${page}`;
         break;
+
       case '3': // most liked
         endpoint = `/search/*?type=likes&count=10&page=${page}`;
         break;
+
       case '4': // trending
         endpoint = `/search/*?type=trending&count=10&page=${page}`;
         break;
-      case '5': // by user
+
+      case '5': // by user (my online levels / user levels)
+        // DIPERBAIKI: GDBrowser pakai /search/<accountID>?type=byuser
         {
           const uid = str || accountID;
-          if (uid) endpoint = `/search/${encodeURIComponent(uid)}?type=byuser&count=10&page=${page}`;
+          if (uid) {
+            // Coba resolve username dulu karena GDBrowser butuh username di beberapa kasus
+            const prof = await gbFetch(`/profile/${encodeURIComponent(uid)}`);
+            if (prof && prof.username) {
+              endpoint = `/search/${encodeURIComponent(prof.username)}?type=byuser&count=10&page=${page}`;
+            } else {
+              endpoint = `/search/${encodeURIComponent(uid)}?type=byuser&count=10&page=${page}`;
+            }
+          }
         }
         break;
+
       case '6': // featured
         endpoint = `/search/*?type=featured&count=10&page=${page}`;
         break;
+
       case '7': // magic
         endpoint = `/search/*?type=magic&count=10&page=${page}`;
         break;
-      case '11': // awarded
+
+      case '11': // awarded (rated)
         endpoint = `/search/*?type=awarded&count=10&page=${page}`;
         break;
+
       case '16': // hall of fame
         endpoint = `/search/*?type=hallofFame&count=10&page=${page}`;
         break;
-      case '21': // daily level data
+
+      case '21': // daily level — ambil level data dari ID harian
         {
           const dailyData = await gbFetch('/daily');
-          if (dailyData && dailyData.id) {
-            levels = await gbFetch(`/level/${dailyData.id}`);
-            if (levels && !Array.isArray(levels)) levels = [levels];
+          if (dailyData) {
+            const dailyID = (typeof dailyData === 'object') ? (dailyData.id || dailyData.levelID) : parseInt(String(dailyData), 10);
+            if (dailyID) {
+              const lv = await gbFetch(`/level/${dailyID}`);
+              if (lv) levels = Array.isArray(lv) ? lv : [lv];
+            }
           }
         }
         break;
-      case '22': // weekly level data
+
+      case '22': // weekly level — ambil level data dari ID mingguan
         {
           const weeklyData = await gbFetch('/daily?weekly=1');
-          if (weeklyData && weeklyData.id) {
-            levels = await gbFetch(`/level/${weeklyData.id}`);
-            if (levels && !Array.isArray(levels)) levels = [levels];
+          if (weeklyData) {
+            const weeklyID = (typeof weeklyData === 'object') ? (weeklyData.id || weeklyData.levelID) : parseInt(String(weeklyData), 10);
+            if (weeklyID) {
+              const lv = await gbFetch(`/level/${weeklyID}`);
+              if (lv) levels = Array.isArray(lv) ? lv : [lv];
+            }
           }
         }
         break;
+
       default:
         endpoint = `/search/*?type=recent&count=10&page=${page}`;
     }
 
-    // Fetch kalau endpoint sudah ditentukan (dan levels belum di-fetch manual)
+    // Fetch jika endpoint sudah ditentukan dan levels belum di-fetch
     if (!levels && endpoint) {
-      levels = await gbFetch(endpoint);
-    }
-
-    // GDBrowser search returns { data: [...], found: N } atau langsung array
-    if (levels && !Array.isArray(levels) && levels.data) {
-      levels = levels.data;
+      const raw = await gbFetch(endpoint);
+      if (raw) {
+        // GDBrowser bisa return { data: [...], found: N } atau langsung array
+        if (Array.isArray(raw)) {
+          levels = raw;
+        } else if (raw.data && Array.isArray(raw.data)) {
+          levels = raw.data;
+        } else if (typeof raw === 'object' && raw.id) {
+          levels = [raw]; // single level object
+        }
+      }
     }
 
     return res.status(200).send(formatLevels(levels));
   }
 
-  // ── downloadGJLevel22.php — FIXED ──────────────────────────
-  // Ambil data level lengkap (termasuk level string) dari GDBrowser
+  // ── downloadGJLevel22.php ───────────────────────────────────
   if (path.includes('downloadGJLevel22')) {
     const levelID = body.levelID || '';
     if (!levelID) return res.status(200).send('-1');
@@ -656,12 +717,11 @@ export default async function handler(req, res) {
     const lv = await gbFetch(`/level/${encodeURIComponent(levelID)}`);
     if (!lv || typeof lv !== 'object') return res.status(200).send('-1');
 
-    // Format download GD: banyak field termasuk levelData (field 4)
     const parts = [
       `1:${lv.id || levelID}`,
       `2:${lv.name || 'Unknown'}`,
       `3:${lv.description ? b64(lv.description) : ''}`,
-      `4:${lv.data || lv.levelData || ''}`,   // level string (paling penting)
+      `4:${lv.data || lv.levelData || ''}`,
       `5:${lv.version || 1}`,
       `6:${lv.playerID || 0}`,
       `8:10`,
@@ -692,17 +752,18 @@ export default async function handler(req, res) {
     return res.status(200).send(parts);
   }
 
-  // ── getGJScores20.php — FIXED (leaderboard) ─────────────────
+  // ── getGJScores20.php (leaderboard) ─────────────────────────
+  // DIPERBAIKI: GDBrowser hanya punya /leaderboard untuk top stars
+  // type=0: top stars, type lain: fallback ke top stars juga
   if (path.includes('getGJScores20')) {
-    const type  = body.type  || '0'; // 0=top, 1=friends, 2=weekly, 3=creators
+    const type  = body.type  || '0';
     const count = body.count || '100';
 
-    let endpoint = '';
-    switch (type) {
-      case '1':  endpoint = '/leaderboard?count=100&type=friends';  break;
-      case '2':  endpoint = '/leaderboard?count=100&type=weekly';   break;
-      case '3':  endpoint = '/leaderboard?count=100&type=creators'; break;
-      default:   endpoint = `/leaderboard?count=${count}`;          break;
+    // GDBrowser hanya mendukung top leaderboard, creators tidak ada
+    // type=3 (creators) → /leaderboard?type=creators kalau ada, atau fallback
+    let endpoint = `/leaderboard?count=${count}`;
+    if (type === '3') {
+      endpoint = `/leaderboard?count=${count}&type=creators`;
     }
 
     const scores = await gbFetch(endpoint);
